@@ -37,9 +37,13 @@ def _clean_header(s: str) -> str:
 # VD: 5 digits right after "ВД", optional spaces and optional "№"
 RE_VD = re.compile(r"(?i)\bВД\s*№?\s*(\d{5})\b")
 # VP: 8 digits right after "ВП", optional spaces and optional "№"
-RE_VP = re.compile(r"(?i)\bВП\s*№?\s*(\d{8})\b")
+RE_VP = re.compile(r"(?i)вп\s*№?\s*([0-9]{8})")
 # IPN: any 10 consecutive digits
 RE_IPN_10 = re.compile(r"\b(\d{10})\b")
+# --- CaseID extractor: 6 digits starting with 1 or 2, after a word containing "іден"
+RE_CASEID = re.compile(
+    r"(?iu)\b[\w\-]*[іиi]ден[\w\-]*\b[\s:;#№\-]*([12]\d{5})"
+)
 # Name after explicit marker "Боржник:"
 NAME_AFTER_BORZHNIK = re.compile(
     r"(?i)боржник\s*:\s*([А-ЯA-ZІЇЄҐ][А-Яа-яA-Za-zІЇЄҐіїєґ'`-]+(?:\s+[А-ЯA-ZІЇЄҐ][А-Яа-яA-Za-zІЇЄҐіїєґ'`-]+){1,2})"
@@ -50,6 +54,7 @@ def extract_vd(text: str) -> str:
     return m.group(1) if m else ""
 
 def extract_vp(text: str) -> str:
+    """Extract 8-digit VP appearing after 'ВП' (case-insensitive)."""
     m = RE_VP.search(str(text))
     return m.group(1) if m else ""
 
@@ -70,7 +75,12 @@ def extract_ipn(text: str) -> str:
         if is_valid_ipn(cand):
             return cand
     return ""
-
+    
+def extract_caseid(text: str) -> str:
+    """Extract CaseID (6 digits starting with 1 or 2) after a word containing 'іден'."""
+    m = RE_CASEID.search(str(text))
+    return m.group(1) if m else ""
+    
 def extract_name(text: str) -> str:
     s = str(text)
     m = NAME_AFTER_BORZHNIK.search(s)
@@ -94,10 +104,6 @@ def normalize_date(series: pd.Series) -> pd.Series:
 
 # ===== UI =====
 st.title("📑 Bank Statement – Filter & Extract")
-st.write(
-    "Upload a CSV/XLS/XLSX file. Required headers (after normalization): "
-    "**'Дата'**, **'Зараховано'**, **'Призначення платежу'**."
-)
 
 uploaded = st.file_uploader("Choose a statement file", type=["csv", "xls", "xlsx"])
 
