@@ -49,6 +49,7 @@ RE_VD = re.compile(r"(?i)\bВД\s*№?\s*(\d{5})\b")
 # VP: 8 digits right after "ВП"; works with/without spaces and optional "№",
 # and even if 'ВП' is glued to previous text (e.g., "...iВП69551275")
 RE_VP = re.compile(r"(?i)вп\s*№?\s*([0-9]{8})")
+RE_VP_SEMI = re.compile(r";\s*(?:№\s*)?(6\d{7})\s*;")
 
 # IPN: any 10 consecutive digits
 RE_IPN_10 = re.compile(r"\b(\d{10})\b")
@@ -66,8 +67,15 @@ def extract_vd(text: str) -> str:
     return m.group(1) if m else ""
 
 def extract_vp(text: str) -> str:
-    m = RE_VP.search(str(text))
-    return m.group(1) if m else ""
+    """Extract VP: first try 'ВП ... 8 digits', then '; [№]6xxxxxxx ;' pattern."""
+    s = str(text)
+    m = RE_VP.search(s)
+    if m:
+        return m.group(1)
+    m2 = RE_VP_SEMI.search(s)
+    if m2:
+        return m2.group(1)
+    return ""
 
 def ipn_control_digit_first9(d9: list[int]) -> int:
     """RNOKPP checksum: weights [-1,5,7,9,4,6,10,5,7] then ((sum % 11) % 10)."""
