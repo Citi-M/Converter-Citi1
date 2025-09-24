@@ -118,21 +118,9 @@ def parse_amount(series: pd.Series) -> pd.Series:
     )
     return pd.to_numeric(amt, errors="coerce")
 
-def format_amount_comma_decimal(series: pd.Series) -> pd.Series:
-    """Format numeric amounts using a comma as decimal separator (e.g., 1234,56)."""
-    def fmt(x):
-        if pd.isna(x):
-            return ""
-        return f"{x:.2f}".replace(".", ",")
-    return series.map(fmt)
-
-def digits_only(series: pd.Series) -> pd.Series:
-    """Leave only digits (IDs become numeric-looking strings)."""
-    return series.astype(str).str.replace(r"\D", "", regex=True)
-
-def normalize_date(series: pd.Series) -> pd.Series:
-    dt = pd.to_datetime(series, dayfirst=True, errors="coerce")
-    return dt.dt.date.astype(str)
+def normalize_date_series(series: pd.Series) -> pd.Series:
+    """Return pandas datetime64[ns] (Excel-friendly)."""
+    return pd.to_datetime(series, dayfirst=True, errors="coerce")
 
 # ===== UI =====
 st.title("📑 Bank Statement Convertor")
@@ -182,7 +170,7 @@ if uploaded:
         credit_pos_rows = len(df_pos)
 
         # Extract fields from purpose (within filtered rows)
-        df_pos["Дата"] = normalize_date(df_pos[date_col])
+        df_pos["Дата"] = normalize_date_series(df_pos[date_col])          # datetime dtype
         df_pos["ВД"] = df_pos[purpose_col].map(extract_vd)
         df_pos["ВП"] = df_pos[purpose_col].map(extract_vp)
         df_pos["ІПН"] = df_pos[purpose_col].map(extract_ipn)
@@ -196,19 +184,19 @@ if uploaded:
         cnt_caseid_found = (df_pos["CaseID"] != "").sum()
         cnt_nothing_found = ((df_pos[["ВП", "ВД", "ІПН", "CaseID"]] == "").all(axis=1)).sum()
 
-        # ---- Build result (no table on screen) ----
+        # ---- Build result (keep numeric dtypes) ----
         result_cols = ["Дата", "ВД", "ВП", "ІПН", "CaseID", "ПІБ", purpose_col, credit_col]
         result = df_pos[result_cols].copy()
 
-        # Numeric-looking formatting:
-        # - IDs: digits only (no separators/letters)
+        # IDs to numeric Int64 (nullable integers)
         for c in ["ВД", "ВП", "ІПН", "CaseID"]:
-            result[c] = digits_only(result[c])
+            result[c] = pd.to_numeric(result[c], errors="coerce").astype("Int64")
 
-        # - Credit: comma decimal separator
-        result[credit_col] = format_amount_comma_decimal(amt_num.loc[df_pos.index])
+        # Date as datetime, Credit as float
+        result["Дата"] = df_pos["Дата"]                      # already datetime64
+        result[credit_col] = amt_num.loc[df_pos.index].astype(float)
 
-        # ---- Show only metrics ----
+        # ---- Show metrics only (no table) ----
         st.subheader("Summary")
         st.write(f"Total rows in file: **{total_rows}**")
         st.write(f"Rows where Credit > 0: **{credit_pos_rows}**")
@@ -218,16 +206,49 @@ if uploaded:
         st.write(f"Rows with CaseID found: **{cnt_caseid_found}**")
         st.write(f"Rows where nothing found (VP/VD/IPN/CaseID): **{cnt_nothing_found}**")
 
-        # ---- Downloads only ----
-        csv_bytes = result.to_csv(index=False).encode("utf-8-sig")
-        st.download_button("⬇️ Download CSV", data=csv_bytes,
-                           file_name="parsed_statement.csv", mime="text/csv")
+        # ---- Downloads ----
+        # CSV: keep numbers numeric; only format Credit with decimal comma for CSV text
+        csv_out = result.copy()
+        csv_out[credit_col] = csv_out[credit_col].map(
+            lambda x: ("" if pd.isna(x) else f"{x:.2f}".replace(".", ","))
+        )
+        st.download_button(
+            "⬇️ Download CSV",
+            data=csv_out.to_csv(index=False).encode("utf-8-sig"),
+            file_name="parsed_statement.csv",
+            mime="text/csv",
+        )
 
+        # Excel: write numeric types + apply number formats
         buf = BytesIO()
-        result.to_excel(buf, index=False, engine="openpyxl")
-        st.download_button("⬇️ Download Excel", data=buf.getvalue(),
-                           file_name="parsed_statement.xlsx",
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        try:
+            # Prefer xlsxwriter for easy column formats
+            with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+                result.to_excel(writer, index=False, sheet_name="Result")
+                wb = writer.book
+                ws = writer.sheets["Result"]
+
+                fmt_date   = wb.add_format({"num_format": "yyyy-mm-dd"})
+                fmt_int    = wb.add_format({"num_format": "#,##0"})
+                fmt_amount = wb.add_format({"num_format": "#,##0.00"})
+
+                col_idx = {col: i for i, col in enumerate(result.columns)}
+
+                if "Дата" in col_idx: ws.set_column(col_idx["Дата"], col_idx["Дата"], 12, fmt_date)
+                for c in ["ВД", "ВП", "ІПН", "CaseID"]:
+                    if c in col_idx: ws.set_column(col_idx[c], col_idx[c], 14, fmt_int)
+                if credit_col in col_idx: ws.set_column(col_idx[credit_col], col_idx[credit_col], 16, fmt_amount)
+        except Exception:
+            # Fallback to openpyxl without fancy formatting (still numeric types)
+            with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+                result.to_excel(writer, index=False, sheet_name="Result")
+
+        st.download_button(
+            "⬇️ Download Excel",
+            data=buf.getvalue(),
+            file_name="parsed_statement.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
     except ModuleNotFoundError:
         st.error("Excel engine is missing. For .xlsx add 'openpyxl'; for .xls add 'xlrd==2.0.1' to requirements.txt.")
