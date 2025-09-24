@@ -24,17 +24,22 @@ if "auth" not in st.session_state or not st.session_state["auth"]:
     login()
     st.stop()
 
-# ===== Helpers: parsing/validation (all messages & comments in English) =====
+# ===== Helpers =====
+
+# Header normalizer: trim spaces, NBSP, BOM and collapse whitespace
+def _clean_header(s: str) -> str:
+    if s is None:
+        return ""
+    s = str(s).replace("\u00a0", " ").replace("\ufeff", "")
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
 # VD: 5 digits right after "ВД", optional spaces and optional "№"
 RE_VD = re.compile(r"(?i)\bВД\s*№?\s*(\d{5})\b")
-
 # VP: 8 digits right after "ВП", optional spaces and optional "№"
 RE_VP = re.compile(r"(?i)\bВП\s*№?\s*(\d{8})\b")
-
 # IPN: any 10 consecutive digits
 RE_IPN_10 = re.compile(r"\b(\d{10})\b")
-
 # Name after explicit marker "Боржник:"
 NAME_AFTER_BORZHNIK = re.compile(
     r"(?i)боржник\s*:\s*([А-ЯA-ZІЇЄҐ][А-Яа-яA-Za-zІЇЄҐіїєґ'`-]+(?:\s+[А-ЯA-ZІЇЄҐ][А-Яа-яA-Za-zІЇЄҐіїєґ'`-]+){1,2})"
@@ -48,21 +53,18 @@ def extract_vp(text: str) -> str:
     m = RE_VP.search(str(text))
     return m.group(1) if m else ""
 
-def ipn_control_digit_first9(digits9: list[int]) -> int:
-    """Compute control digit for Ukrainian IPN using weights [-1,5,7,9,4,6,10,5,7] and ((sum % 11) % 10)."""
+def ipn_control_digit_first9(d9: list[int]) -> int:
     weights = [-1, 5, 7, 9, 4, 6, 10, 5, 7]
-    s = sum(d * w for d, w in zip(digits9, weights))
+    s = sum(x * w for x, w in zip(d9, weights))
     return (s % 11) % 10
 
 def is_valid_ipn(s: str) -> bool:
-    """Validate 10-digit IPN by checksum."""
     if not (s and s.isdigit() and len(s) == 10):
         return False
-    digits = [int(ch) for ch in s]
-    return digits[9] == ipn_control_digit_first9(digits[:9])
+    d = [int(ch) for ch in s]
+    return d[9] == ipn_control_digit_first9(d[:9])
 
 def extract_ipn(text: str) -> str:
-    """Return the first 10-digit sequence that passes IPN validation; otherwise empty string."""
     for m in RE_IPN_10.finditer(str(text)):
         cand = m.group(1)
         if is_valid_ipn(cand):
@@ -70,16 +72,13 @@ def extract_ipn(text: str) -> str:
     return ""
 
 def extract_name(text: str) -> str:
-    """Extract name after 'Боржник:' and strip trailing digits."""
     s = str(text)
     m = NAME_AFTER_BORZHNIK.search(s)
     if not m:
         return ""
-    name = re.sub(r"\s*\d+\s*$", "", m.group(1)).strip()
-    return name
+    return re.sub(r"\s*\d+\s*$", "", m.group(1)).strip()
 
-def parse_amount_to_numeric(series: pd.Series) -> pd.Series:
-    """Normalize amount text to numeric: remove NBSP/spaces, ',' -> '.', drop non-numeric."""
+def parse_amount(series: pd.Series) -> pd.Series:
     amt = (
         series.astype(str)
         .str.replace("\u00a0", " ", regex=False)
@@ -90,16 +89,14 @@ def parse_amount_to_numeric(series: pd.Series) -> pd.Series:
     return pd.to_numeric(amt, errors="coerce")
 
 def normalize_date(series: pd.Series) -> pd.Series:
-    """Parse dates with dayfirst=True and return ISO date strings."""
     dt = pd.to_datetime(series, dayfirst=True, errors="coerce")
     return dt.dt.date.astype(str)
 
-# ===== UI: upload + checks + filter + extract =====
+# ===== UI =====
 st.title("📑 Bank Statement – Filter & Extract")
 st.write(
-    "Upload a CSV/XLS/XLSX file. Required headers: **'Дата'**, **'Зараховано'**, **'Призначення платежу'**. "
-    "The app keeps only rows where **'Зараховано' > 0**, and extracts **'ВД'** (5 digits), **'ВП'** (8 digits), "
-    "**'ІПН'** (valid 10 digits), and **'ПІБ'** (after 'Боржник:')."
+    "Upload a CSV/XLS/XLSX file. Required headers (after normalization): "
+    "**'Дата'**, **'Зараховано'**, **'Призначення платежу'**."
 )
 
 uploaded = st.file_uploader("Choose a statement file", type=["csv", "xls", "xlsx"])
@@ -108,16 +105,19 @@ if uploaded:
     try:
         name = uploaded.name.lower()
 
-        # Minimal readers. For .xls you need xlrd; for .xlsx you need openpyxl.
+        # Read file
         if name.endswith(".csv"):
             df = pd.read_csv(uploaded, dtype=str)
         elif name.endswith(".xlsx"):
             df = pd.read_excel(uploaded, dtype=str, engine="openpyxl", header=0)
         else:  # .xls
-            import xlrd  # ensure xlrd==2.0.1 in requirements
+            import xlrd
             df = pd.read_excel(uploaded, dtype=str, engine="xlrd", header=0)
 
-        # Required columns (exact names)
+        # Normalize headers to fix cases like "Дата " with trailing spaces
+        df = df.rename(columns=_clean_header)
+
+        # Required columns (exact names after normalization)
         date_col = "Дата"
         credit_col = "Зараховано"
         purpose_col = "Призначення платежу"
@@ -128,18 +128,17 @@ if uploaded:
             st.write("Detected headers:", list(df.columns))
             st.stop()
 
-        # Filter rows where 'Зараховано' > 0
-        amt_num = parse_amount_to_numeric(df[credit_col])
+        # Keep rows where 'Зараховано' > 0
+        amt_num = parse_amount(df[credit_col])
         df_pos = df.loc[amt_num > 0].copy()
 
-        # Extract fields
+        # Extract fields from purpose
         df_pos["ВД"] = df_pos[purpose_col].map(extract_vd)
         df_pos["ВП"] = df_pos[purpose_col].map(extract_vp)
         df_pos["ІПН"] = df_pos[purpose_col].map(extract_ipn)
         df_pos["ПІБ"] = df_pos[purpose_col].map(extract_name)
         df_pos["Дата"] = normalize_date(df_pos[date_col])
 
-        # Result view
         result_cols = ["Дата", "ВД", "ВП", "ІПН", "ПІБ", purpose_col, credit_col]
         result = df_pos[result_cols].copy()
 
@@ -154,9 +153,9 @@ if uploaded:
             st.download_button("⬇️ Download CSV", data=csv_bytes,
                                file_name="parsed_statement.csv", mime="text/csv")
 
-            xls_buffer = BytesIO()
-            result.to_excel(xls_buffer, index=False, engine="openpyxl")
-            st.download_button("⬇️ Download Excel", data=xls_buffer.getvalue(),
+            buf = BytesIO()
+            result.to_excel(buf, index=False, engine="openpyxl")
+            st.download_button("⬇️ Download Excel", data=buf.getvalue(),
                                file_name="parsed_statement.xlsx",
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
