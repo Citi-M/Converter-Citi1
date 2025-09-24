@@ -1,5 +1,4 @@
-streamlit
-pandas
-openpyxl
-natasha
-pymorphy2-dicts-ru
+streamlit>=1.36
+pandas>=2.0
+openpyxl>=3.1.2   # для .xlsx
+xlrd==2.0.1       # ДЛЯ .xls
