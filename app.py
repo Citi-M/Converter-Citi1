@@ -214,18 +214,6 @@ if uploaded:
             file_name="parsed_statement.csv",
             mime="text/csv",
         )
-        
-        # ---- Show metrics only (no table) ----
-        st.subheader("Summary")
-        st.write(f"Total rows in file: **{total_rows}**")
-        st.write(f"Rows where Credit > 0: **{credit_pos_rows}**")
-        st.write(f"Rows with VP found: **{cnt_vp}**")
-        st.write(f"Rows with VD found: **{cnt_vd}**")
-        st.write(f"Rows with IPN found: **{cnt_ipn}**")
-        st.write(f"Rows with CaseID found: **{cnt_caseid_found}**")
-        st.write(f"Rows where nothing found (VP/VD/IPN/CaseID): **{cnt_nothing_found}**")
-
-
 
         # Excel: write numeric types + apply number formats
         buf = BytesIO()
@@ -257,6 +245,21 @@ if uploaded:
             file_name="parsed_statement.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
+
+        
+        # ---- Show metrics only (no table) ----
+        st.subheader("Summary")
+        st.write(f"Total rows in file: **{total_rows}**")
+        st.write(f"Rows where Credit > 0: **{credit_pos_rows}**")
+        st.write(f"Rows with VP found: **{cnt_vp}**")
+        st.write(f"Rows with VD found: **{cnt_vd}**")
+        st.write(f"Rows with IPN found: **{cnt_ipn}**")
+        st.write(f"Rows with CaseID found: **{cnt_caseid_found}**")
+        st.write(f"Rows where nothing found (VP/VD/IPN/CaseID): **{cnt_nothing_found}**")
+
+
+
+
 
     except ModuleNotFoundError:
         st.error("Excel engine is missing. For .xlsx add 'openpyxl'; for .xls add 'xlrd==2.0.1' to requirements.txt.")
