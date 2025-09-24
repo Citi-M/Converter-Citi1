@@ -139,13 +139,16 @@ if uploaded:
         df_pos = df.loc[amt_num > 0].copy()
 
         # Extract fields from purpose
+        df_pos["Дата"] = normalize_date(df_pos[date_col])
         df_pos["ВД"] = df_pos[purpose_col].map(extract_vd)
         df_pos["ВП"] = df_pos[purpose_col].map(extract_vp)
         df_pos["ІПН"] = df_pos[purpose_col].map(extract_ipn)
+        df_pos["CaseID"] = df_pos[purpose_col].map(extract_caseid)
         df_pos["ПІБ"] = df_pos[purpose_col].map(extract_name)
-        df_pos["Дата"] = normalize_date(df_pos[date_col])
+        
+    
 
-        result_cols = ["Дата", "ВД", "ВП", "ІПН", "ПІБ", purpose_col, credit_col]
+        result_cols = ["Дата", "ВД", "ВП", "ІПН","CaseID", "ПІБ", purpose_col, credit_col]
         result = df_pos[result_cols].copy()
 
         if result.empty:
