@@ -216,4 +216,34 @@ if uploaded_file:
                 df_raw = pd.read_csv(uploaded_file, dtype=str, sep=";")
         else:
             # For .xls you need xlrd; for .xlsx you need openpyxl (add both to requirements.txt)
-            df_raw = p_
+            df_raw = pd.read_excel(uploaded_file, dtype=str)
+
+        # Process and display
+        result_df = process_dataframe(df_raw)
+
+        st.success(f"Parsed {len(result_df)} matching rows.")
+        st.dataframe(result_df, use_container_width=True)
+
+        # Downloads
+        csv_bytes = result_df.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "⬇️ Download CSV",
+            data=csv_bytes,
+            file_name="parsed_statement.csv",
+            mime="text/csv"
+        )
+
+        # Optional: Excel download
+        xls_buffer = BytesIO()
+        result_df.to_excel(xls_buffer, index=False, engine="openpyxl")
+        st.download_button(
+            "⬇️ Download Excel",
+            data=xls_buffer.getvalue(),
+            file_name="parsed_statement.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    except Exception as e:
+        st.error(f"Error while processing the file: {e}")
+else:
+    st.info("Please upload a CSV/XLS/XLSX bank statement to begin.")
