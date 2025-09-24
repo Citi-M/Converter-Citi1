@@ -201,17 +201,7 @@ if uploaded:
         # Date as datetime, Credit as float
         result["Дата"] = df_pos["Дата"]                              # already datetime64
         result[credit_col] = amt_num.loc[df_pos.index].astype(float)
-
-        # ---- Show metrics only (no table) ----
-        st.subheader("Summary")
-        st.write(f"Total rows in file: **{total_rows}**")
-        st.write(f"Rows where Credit > 0: **{credit_pos_rows}**")
-        st.write(f"Rows with VP found: **{cnt_vp}**")
-        st.write(f"Rows with VD found: **{cnt_vd}**")
-        st.write(f"Rows with IPN found: **{cnt_ipn}**")
-        st.write(f"Rows with CaseID found: **{cnt_caseid_found}**")
-        st.write(f"Rows where nothing found (VP/VD/IPN/CaseID): **{cnt_nothing_found}**")
-
+        
         # ---- Downloads ----
         # CSV: keep numbers numeric; only format Credit with decimal comma for CSV text
         csv_out = result.copy()
@@ -224,6 +214,18 @@ if uploaded:
             file_name="parsed_statement.csv",
             mime="text/csv",
         )
+        
+        # ---- Show metrics only (no table) ----
+        st.subheader("Summary")
+        st.write(f"Total rows in file: **{total_rows}**")
+        st.write(f"Rows where Credit > 0: **{credit_pos_rows}**")
+        st.write(f"Rows with VP found: **{cnt_vp}**")
+        st.write(f"Rows with VD found: **{cnt_vd}**")
+        st.write(f"Rows with IPN found: **{cnt_ipn}**")
+        st.write(f"Rows with CaseID found: **{cnt_caseid_found}**")
+        st.write(f"Rows where nothing found (VP/VD/IPN/CaseID): **{cnt_nothing_found}**")
+
+
 
         # Excel: write numeric types + apply number formats
         buf = BytesIO()
