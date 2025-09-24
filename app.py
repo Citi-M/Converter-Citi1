@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
+import re
 
 # ---- Page config ----
-st.set_page_config(page_title="Purpose Column + Positive Credit Filter", layout="centered")
+st.set_page_config(page_title="Purpose + Credit Filter with VD/VP", layout="centered")
 
 # ===== Simple authentication =====
 CREDENTIALS = {"User": "1"}
@@ -22,9 +23,13 @@ if "auth" not in st.session_state or not st.session_state["auth"]:
     login()
     st.stop()
 
-# ===== File upload + exact column check + filter =====
-st.title("📑 Purpose Column + Positive Credit Filter")
-st.write("Upload a CSV/XLS/XLSX file. The app looks for the exact header **'Призначення платежу'** and shows only rows where **'Зараховано' > 0**.")
+# ===== File upload + exact column check + filter + VD/VP extract =====
+st.title("📑 Bank Statement – Filter & Extract")
+st.write(
+    "Upload a CSV/XLS/XLSX file. The app looks for exact headers "
+    "**'Призначення платежу'** and **'Зараховано'**, shows only rows "
+    "where **'Зараховано' > 0**, and extracts **'ВД'** (5 digits) and **'ВП'** (8 digits)."
+)
 
 uploaded = st.file_uploader("Choose a statement file", type=["csv", "xls", "xlsx"])
 
@@ -41,37 +46,54 @@ if uploaded:
             import xlrd  # ensure xlrd==2.0.1 is in requirements
             df = pd.read_excel(uploaded, dtype=str, engine="xlrd", header=0)
 
-        target_col = "Призначення платежу"
+        purpose_col = "Призначення платежу"
         credit_col = "Зараховано"
 
         # Check required columns
-        missing = [c for c in [target_col, credit_col] if c not in df.columns]
+        missing = [c for c in [purpose_col, credit_col] if c not in df.columns]
         if missing:
             st.error(f"Missing required column(s): {', '.join(missing)}")
             st.write("Detected headers:", list(df.columns))
             st.stop()
 
-        # Parse 'Зараховано' to numeric and filter > 0 (handles spaces and comma decimals)
+        # Parse 'Зараховано' to numeric and filter > 0 (handles NBSP, spaces, comma decimals)
         amt = (
             df[credit_col]
             .astype(str)
-            .str.replace("\u00a0", " ", regex=False)  # non-breaking spaces
-            .str.replace(" ", "", regex=False)       # thousands separators
-            .str.replace(",", ".", regex=False)      # decimal comma -> dot
-            .str.replace(r"[^\d\.\-]", "", regex=True)  # drop currency symbols etc.
+            .str.replace("\u00a0", " ", regex=False)   # non-breaking spaces
+            .str.replace(" ", "", regex=False)         # thousands separators
+            .str.replace(",", ".", regex=False)        # decimal comma -> dot
+            .str.replace(r"[^\d\.\-]", "", regex=True) # drop non-numeric
         )
         amt_num = pd.to_numeric(amt, errors="coerce")
-
         df_pos = df.loc[amt_num > 0].copy()
+
+        # --- Extractors for VD (5 digits) and VP (8 digits) ---
+        # VD: 5 digits right after "ВД", optional spaces and optional "№"
+        re_vd = re.compile(r"(?i)\bВД\s*№?\s*(\d{5})\b")
+        # VP: 8 digits right after "ВП", optional spaces and optional "№"
+        re_vp = re.compile(r"(?i)\bВП\s*№?\s*(\d{8})\b")
+
+        def extract_vd(text: str) -> str:
+            m = re_vd.search(str(text))
+            return m.group(1) if m else ""
+
+        def extract_vp(text: str) -> str:
+            m = re_vp.search(str(text))
+            return m.group(1) if m else ""
+
+        df_pos["ВД"] = df_pos[purpose_col].map(extract_vd)
+        df_pos["ВП"] = df_pos[purpose_col].map(extract_vp)
 
         if df_pos.empty:
             st.warning("No rows where 'Зараховано' > 0.")
         else:
             st.success(f"Showing {len(df_pos)} row(s) where 'Зараховано' > 0.")
-            # Show only the two relevant columns by default
-            st.dataframe(df_pos[[credit_col, target_col]].head(200))
+            # Show filtered columns
+            show_cols = [credit_col, purpose_col, "ВД", "ВП"]
+            st.dataframe(df_pos[show_cols].head(500))
 
-    except ModuleNotFoundError as e:
+    except ModuleNotFoundError:
         st.error("Excel engine is missing. For .xlsx add 'openpyxl'; for .xls add 'xlrd==2.0.1' to requirements.txt.")
     except Exception as e:
         st.error(f"Error while processing the file: {e}")
