@@ -4,7 +4,7 @@ import re
 from io import BytesIO
 
 # ---- Page config ----
-st.set_page_config(page_title="Statement Filter & Extract (VD/VP/IPN/CaseID/Name)", layout="centered")
+st.set_page_config(page_title="Bank Statement Convertor", layout="centered")
 
 # ===== Simple authentication =====
 CREDENTIALS = {"User": "1"}
@@ -46,12 +46,12 @@ def pick_col(df: pd.DataFrame, candidates):
 # VD: 5 digits right after "ВД", optional spaces and optional "№"
 RE_VD = re.compile(r"(?i)\bВД\s*№?\s*(\d{5})\b")
 
-# VP: 8 digits right after "ВП"; works with/without spaces and optional "№",
-# and even if 'ВП' is glued to previous text (e.g., "...iВП69551275")
+# VP: 8 digits after "ВП", optional spaces and optional "№"
+# Extra rule: after ';', '; ', or '; №', take 8 digits starting with '6' and ending before ';'
 RE_VP = re.compile(r"(?i)вп\s*№?\s*([0-9]{8})")
 RE_VP_SEMI = re.compile(r";\s*(?:№\s*)?(6\d{7})\s*;")
 
-# IPN: any 10 consecutive digits
+# IPN: any 10 consecutive digits (validated by checksum)
 RE_IPN_10 = re.compile(r"\b(\d{10})\b")
 
 # CaseID: 6 digits starting with 1 or 2, right after a word containing "іден"/"иден"/"iden"
@@ -67,7 +67,6 @@ def extract_vd(text: str) -> str:
     return m.group(1) if m else ""
 
 def extract_vp(text: str) -> str:
-    """Extract VP: first try 'ВП ... 8 digits', then '; [№]6xxxxxxx ;' pattern."""
     s = str(text)
     m = RE_VP.search(s)
     if m:
@@ -119,19 +118,20 @@ def parse_amount(series: pd.Series) -> pd.Series:
     )
     return pd.to_numeric(amt, errors="coerce")
 
+def format_amount_comma_decimal(series: pd.Series) -> pd.Series:
+    """Format numeric amounts using a comma as decimal separator (e.g., 1234,56)."""
+    def fmt(x):
+        if pd.isna(x):
+            return ""
+        return f"{x:.2f}".replace(".", ",")
+    return series.map(fmt)
+
 def normalize_date(series: pd.Series) -> pd.Series:
     dt = pd.to_datetime(series, dayfirst=True, errors="coerce")
     return dt.dt.date.astype(str)
 
 # ===== UI =====
-st.title("📑 Bank Statement – Filter & Extract")
-st.write(
-    "Upload a CSV/XLS/XLSX file. Required headers (after normalization): "
-    "**'Дата'** or **'Дата операції'**, **'Зараховано'** or **'Кредит'**, and **'Призначення платежу'**.\n\n"
-    "The app keeps only rows where **'Зараховано/Кредит' > 0** and extracts **'ВД'** (5 digits), "
-    "**'ВП'** (8 digits), **'ІПН'** (valid 10 digits), **'CaseID'** (6 digits after a word with 'іден'), "
-    "and **'ПІБ'** (after 'Боржник:')."
-)
+st.title("📑 Bank Statement Convertor")
 
 uploaded = st.file_uploader("Choose a statement file", type=["csv", "xls", "xlsx"])
 
@@ -169,11 +169,15 @@ if uploaded:
             st.write("Detected headers:", list(df.columns))
             st.stop()
 
+        # === Metrics base ===
+        total_rows = len(df)
+
         # Keep rows where credit > 0
         amt_num = parse_amount(df[credit_col])
         df_pos = df.loc[amt_num > 0].copy()
+        credit_pos_rows = len(df_pos)
 
-        # Extract fields from purpose
+        # Extract fields from purpose (within filtered rows)
         df_pos["Дата"] = normalize_date(df_pos[date_col])
         df_pos["ВД"] = df_pos[purpose_col].map(extract_vd)
         df_pos["ВП"] = df_pos[purpose_col].map(extract_vp)
@@ -181,26 +185,40 @@ if uploaded:
         df_pos["CaseID"] = df_pos[purpose_col].map(extract_caseid)
         df_pos["ПІБ"] = df_pos[purpose_col].map(extract_name)
 
-        # Build result
+        # Counts (within credit > 0 subset)
+        cnt_vp = (df_pos["ВП"] != "").sum()
+        cnt_vd = (df_pos["ВД"] != "").sum()
+        cnt_ipn = (df_pos["ІПН"] != "").sum()
+        cnt_caseid_missing = (df_pos["CaseID"] == "").sum()
+        cnt_nothing_found = ((df_pos[["ВП", "ВД", "ІПН", "CaseID"]] == "").all(axis=1)).sum()
+
+        # Build result (no table shown on screen)
         result_cols = ["Дата", "ВД", "ВП", "ІПН", "CaseID", "ПІБ", purpose_col, credit_col]
         result = df_pos[result_cols].copy()
 
-        if result.empty:
-            st.warning("No rows where the credit amount is greater than 0.")
-        else:
-            st.success(f"Showing {len(result)} row(s) with credit > 0.")
-            st.dataframe(result.head(1000), use_container_width=True)
+        # Format credit with comma decimal separator
+        result[credit_col] = format_amount_comma_decimal(amt_num.loc[df_pos.index])
 
-            # Downloads
-            csv_bytes = result.to_csv(index=False).encode("utf-8-sig")
-            st.download_button("⬇️ Download CSV", data=csv_bytes,
-                               file_name="parsed_statement.csv", mime="text/csv")
+        # ---- Show only metrics (no table) ----
+        st.subheader("Summary")
+        st.write(f"Total rows in file: **{total_rows}**")
+        st.write(f"Rows where Credit > 0: **{credit_pos_rows}**")
+        st.write(f"Rows with VP found: **{cnt_vp}**")
+        st.write(f"Rows with VD found: **{cnt_vd}**")
+        st.write(f"Rows with IPN found: **{cnt_ipn}**")
+        st.write(f"Rows with missing CaseID: **{cnt_caseid_missing}**")
+        st.write(f"Rows where nothing found (VP/VD/IPN/CaseID): **{cnt_nothing_found}**")
 
-            buf = BytesIO()
-            result.to_excel(buf, index=False, engine="openpyxl")
-            st.download_button("⬇️ Download Excel", data=buf.getvalue(),
-                               file_name="parsed_statement.xlsx",
-                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        # ---- Downloads only ----
+        csv_bytes = result.to_csv(index=False).encode("utf-8-sig")
+        st.download_button("⬇️ Download CSV", data=csv_bytes,
+                           file_name="parsed_statement.csv", mime="text/csv")
+
+        buf = BytesIO()
+        result.to_excel(buf, index=False, engine="openpyxl")
+        st.download_button("⬇️ Download Excel", data=buf.getvalue(),
+                           file_name="parsed_statement.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     except ModuleNotFoundError:
         st.error("Excel engine is missing. For .xlsx add 'openpyxl'; for .xls add 'xlrd==2.0.1' to requirements.txt.")
