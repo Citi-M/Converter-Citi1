@@ -143,6 +143,11 @@ if uploaded:
         # Normalize headers (e.g., fix "Дата " with trailing spaces)
         df = df.rename(columns=_clean_header)
 
+        # Drop summary/footer rows like "Всього за оборотами:" and "Кінцевий залишок:"
+        summary_re = re.compile(r"(всього\s+за\s+оборотами|кінцевий\s+залишок)", re.IGNORECASE)
+        row_text = df.astype(str).agg(" ".join, axis=1)
+        df = df.loc[~row_text.str.contains(summary_re, na=False)].copy()
+
         # Pick required columns
         date_col = pick_col(df, ["Дата", "Дата операції"])
         credit_col = pick_col(df, ["Зараховано", "Кредит"])
@@ -170,7 +175,7 @@ if uploaded:
         credit_pos_rows = len(df_pos)
 
         # Extract fields from purpose (within filtered rows)
-        df_pos["Дата"] = normalize_date_series(df_pos[date_col])          # datetime dtype
+        df_pos["Дата"] = normalize_date_series(df_pos[date_col])     # datetime dtype
         df_pos["ВД"] = df_pos[purpose_col].map(extract_vd)
         df_pos["ВП"] = df_pos[purpose_col].map(extract_vp)
         df_pos["ІПН"] = df_pos[purpose_col].map(extract_ipn)
@@ -185,7 +190,8 @@ if uploaded:
         cnt_nothing_found = ((df_pos[["ВП", "ВД", "ІПН", "CaseID"]] == "").all(axis=1)).sum()
 
         # ---- Build result (keep numeric dtypes) ----
-        result_cols = ["Дата", "ВД", "ВП", "ІПН", "CaseID", "ПІБ", purpose_col, credit_col]
+        # Order: Date, VD, VP, IPN, CaseID, Credit, Name, Purpose
+        result_cols = ["Дата", "ВД", "ВП", "ІПН", "CaseID", credit_col, "ПІБ", purpose_col]
         result = df_pos[result_cols].copy()
 
         # IDs to numeric Int64 (nullable integers)
@@ -193,7 +199,7 @@ if uploaded:
             result[c] = pd.to_numeric(result[c], errors="coerce").astype("Int64")
 
         # Date as datetime, Credit as float
-        result["Дата"] = df_pos["Дата"]                      # already datetime64
+        result["Дата"] = df_pos["Дата"]                              # already datetime64
         result[credit_col] = amt_num.loc[df_pos.index].astype(float)
 
         # ---- Show metrics only (no table) ----
@@ -239,7 +245,7 @@ if uploaded:
                     if c in col_idx: ws.set_column(col_idx[c], col_idx[c], 14, fmt_int)
                 if credit_col in col_idx: ws.set_column(col_idx[credit_col], col_idx[credit_col], 16, fmt_amount)
         except Exception:
-            # Fallback to openpyxl without fancy formatting (still numeric types)
+            # Fallback to openpyxl without custom formatting (still numeric types)
             with pd.ExcelWriter(buf, engine="openpyxl") as writer:
                 result.to_excel(writer, index=False, sheet_name="Result")
 
