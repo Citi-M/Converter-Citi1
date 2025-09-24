@@ -46,7 +46,7 @@ def pick_col(df: pd.DataFrame, candidates):
 # VD: 5 digits right after "ВД", optional spaces and optional "№"
 RE_VD = re.compile(r"(?i)\bВД\s*№?\s*(\d{5})\b")
 
-# VP: 8 digits after "ВП", optional spaces and optional "№"
+# VP: 8 digits after "ВП" (works with/without spaces and optional "№")
 # Extra rule: after ';', '; ', or '; №', take 8 digits starting with '6' and ending before ';'
 RE_VP = re.compile(r"(?i)вп\s*№?\s*([0-9]{8})")
 RE_VP_SEMI = re.compile(r";\s*(?:№\s*)?(6\d{7})\s*;")
@@ -126,6 +126,10 @@ def format_amount_comma_decimal(series: pd.Series) -> pd.Series:
         return f"{x:.2f}".replace(".", ",")
     return series.map(fmt)
 
+def digits_only(series: pd.Series) -> pd.Series:
+    """Leave only digits (IDs become numeric-looking strings)."""
+    return series.astype(str).str.replace(r"\D", "", regex=True)
+
 def normalize_date(series: pd.Series) -> pd.Series:
     dt = pd.to_datetime(series, dayfirst=True, errors="coerce")
     return dt.dt.date.astype(str)
@@ -185,28 +189,33 @@ if uploaded:
         df_pos["CaseID"] = df_pos[purpose_col].map(extract_caseid)
         df_pos["ПІБ"] = df_pos[purpose_col].map(extract_name)
 
-        # Counts (within credit > 0 subset)
+        # ---- Counts (within credit > 0 subset) ----
         cnt_vp = (df_pos["ВП"] != "").sum()
         cnt_vd = (df_pos["ВД"] != "").sum()
         cnt_ipn = (df_pos["ІПН"] != "").sum()
-        cnt_caseid_missing = (df_pos["CaseID"] == "").sum()
+        cnt_caseid_found = (df_pos["CaseID"] != "").sum()
         cnt_nothing_found = ((df_pos[["ВП", "ВД", "ІПН", "CaseID"]] == "").all(axis=1)).sum()
 
-        # Build result (no table shown on screen)
+        # ---- Build result (no table on screen) ----
         result_cols = ["Дата", "ВД", "ВП", "ІПН", "CaseID", "ПІБ", purpose_col, credit_col]
         result = df_pos[result_cols].copy()
 
-        # Format credit with comma decimal separator
+        # Numeric-looking formatting:
+        # - IDs: digits only (no separators/letters)
+        for c in ["ВД", "ВП", "ІПН", "CaseID"]:
+            result[c] = digits_only(result[c])
+
+        # - Credit: comma decimal separator
         result[credit_col] = format_amount_comma_decimal(amt_num.loc[df_pos.index])
 
-        # ---- Show only metrics (no table) ----
+        # ---- Show only metrics ----
         st.subheader("Summary")
         st.write(f"Total rows in file: **{total_rows}**")
         st.write(f"Rows where Credit > 0: **{credit_pos_rows}**")
         st.write(f"Rows with VP found: **{cnt_vp}**")
         st.write(f"Rows with VD found: **{cnt_vd}**")
         st.write(f"Rows with IPN found: **{cnt_ipn}**")
-        st.write(f"Rows with missing CaseID: **{cnt_caseid_missing}**")
+        st.write(f"Rows with CaseID found: **{cnt_caseid_found}**")
         st.write(f"Rows where nothing found (VP/VD/IPN/CaseID): **{cnt_nothing_found}**")
 
         # ---- Downloads only ----
