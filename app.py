@@ -6,15 +6,15 @@ from datetime import datetime
 
 # ===== Простая авторизация =====
 CREDENTIALS = {
-    "Mariam": "Mariam4321",
+    "User": "1",
 }
 
 def login():
     st.title("🔐 Авторизация")
     with st.form("login_form"):
-        username = st.text_input("Логин")
-        password = st.text_input("Пароль", type="password")
-        submitted = st.form_submit_button("Войти")
+        username = st.text_input("Login")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Enter")
         if submitted:
             if username in CREDENTIALS and CREDENTIALS[username] == password:
                 st.session_state["auth"] = True
