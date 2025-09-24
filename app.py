@@ -4,7 +4,7 @@ import re
 from io import BytesIO
 
 # ---- Page config ----
-st.set_page_config(page_title="Statement Filter & Extract (VD/VP/IPN/Name)", layout="centered")
+st.set_page_config(page_title="Statement Filter & Extract (VD/VP/IPN/CaseID/Name)", layout="centered")
 
 # ===== Simple authentication =====
 CREDENTIALS = {"User": "1"}
@@ -26,24 +26,36 @@ if "auth" not in st.session_state or not st.session_state["auth"]:
 
 # ===== Helpers =====
 
-# Header normalizer: trim spaces, NBSP, BOM and collapse whitespace
 def _clean_header(s: str) -> str:
+    """Normalize header: strip spaces/NBSP/BOM and collapse whitespace."""
     if s is None:
         return ""
     s = str(s).replace("\u00a0", " ").replace("\ufeff", "")
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
+def pick_col(df: pd.DataFrame, candidates):
+    """Pick the first existing column from candidates (after header normalization)."""
+    if isinstance(candidates, str):
+        return candidates if candidates in df.columns else None
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
+
 # VD: 5 digits right after "ВД", optional spaces and optional "№"
 RE_VD = re.compile(r"(?i)\bВД\s*№?\s*(\d{5})\b")
-# VP: 8 digits right after "ВП", optional spaces and optional "№"
+
+# VP: 8 digits right after "ВП"; works with/without spaces and optional "№",
+# and even if 'ВП' is glued to previous text (e.g., "...iВП69551275")
 RE_VP = re.compile(r"(?i)вп\s*№?\s*([0-9]{8})")
+
 # IPN: any 10 consecutive digits
 RE_IPN_10 = re.compile(r"\b(\d{10})\b")
-# --- CaseID extractor: 6 digits starting with 1 or 2, after a word containing "іден"
-RE_CASEID = re.compile(
-    r"(?iu)\b[\w\-]*[іиi]ден[\w\-]*\b[\s:;#№\-]*([12]\d{5})"
-)
+
+# CaseID: 6 digits starting with 1 or 2, right after a word containing "іден"/"иден"/"iden"
+RE_CASEID = re.compile(r"(?iu)\b[\w\-]*[іиi]ден[\w\-]*\b[\s:;#№\-]*([12]\d{5})")
+
 # Name after explicit marker "Боржник:"
 NAME_AFTER_BORZHNIK = re.compile(
     r"(?i)боржник\s*:\s*([А-ЯA-ZІЇЄҐ][А-Яа-яA-Za-zІЇЄҐіїєґ'`-]+(?:\s+[А-ЯA-ZІЇЄҐ][А-Яа-яA-Za-zІЇЄҐіїєґ'`-]+){1,2})"
@@ -54,11 +66,11 @@ def extract_vd(text: str) -> str:
     return m.group(1) if m else ""
 
 def extract_vp(text: str) -> str:
-    """Extract 8-digit VP appearing after 'ВП' (case-insensitive)."""
     m = RE_VP.search(str(text))
     return m.group(1) if m else ""
 
 def ipn_control_digit_first9(d9: list[int]) -> int:
+    """RNOKPP checksum: weights [-1,5,7,9,4,6,10,5,7] then ((sum % 11) % 10)."""
     weights = [-1, 5, 7, 9, 4, 6, 10, 5, 7]
     s = sum(x * w for x, w in zip(d9, weights))
     return (s % 11) % 10
@@ -75,20 +87,21 @@ def extract_ipn(text: str) -> str:
         if is_valid_ipn(cand):
             return cand
     return ""
-    
+
 def extract_caseid(text: str) -> str:
-    """Extract CaseID (6 digits starting with 1 or 2) after a word containing 'іден'."""
     m = RE_CASEID.search(str(text))
     return m.group(1) if m else ""
-    
+
 def extract_name(text: str) -> str:
     s = str(text)
     m = NAME_AFTER_BORZHNIK.search(s)
     if not m:
         return ""
+    # remove trailing digits stuck to the name
     return re.sub(r"\s*\d+\s*$", "", m.group(1)).strip()
 
 def parse_amount(series: pd.Series) -> pd.Series:
+    """Normalize amounts: remove NBSP/spaces, ',' -> '.', drop non-numeric, then to numeric."""
     amt = (
         series.astype(str)
         .str.replace("\u00a0", " ", regex=False)
@@ -104,6 +117,13 @@ def normalize_date(series: pd.Series) -> pd.Series:
 
 # ===== UI =====
 st.title("📑 Bank Statement – Filter & Extract")
+st.write(
+    "Upload a CSV/XLS/XLSX file. Required headers (after normalization): "
+    "**'Дата'** or **'Дата операції'**, **'Зараховано'** or **'Кредит'**, and **'Призначення платежу'**.\n\n"
+    "The app keeps only rows where **'Зараховано/Кредит' > 0** and extracts **'ВД'** (5 digits), "
+    "**'ВП'** (8 digits), **'ІПН'** (valid 10 digits), **'CaseID'** (6 digits after a word with 'іден'), "
+    "and **'ПІБ'** (after 'Боржник:')."
+)
 
 uploaded = st.file_uploader("Choose a statement file", type=["csv", "xls", "xlsx"])
 
@@ -117,24 +137,31 @@ if uploaded:
         elif name.endswith(".xlsx"):
             df = pd.read_excel(uploaded, dtype=str, engine="openpyxl", header=0)
         else:  # .xls
-            import xlrd
+            import xlrd  # ensure xlrd==2.0.1 in requirements
             df = pd.read_excel(uploaded, dtype=str, engine="xlrd", header=0)
 
-        # Normalize headers to fix cases like "Дата " with trailing spaces
+        # Normalize headers (e.g., fix "Дата " with trailing spaces)
         df = df.rename(columns=_clean_header)
 
-        # Required columns (exact names after normalization)
-        date_col = ["Дата", "Дата операції"]
-        credit_col = ["Зараховано" , "Кредит"]
+        # Pick required columns
+        date_col = pick_col(df, ["Дата", "Дата операції"])
+        credit_col = pick_col(df, ["Зараховано", "Кредит"])
         purpose_col = "Призначення платежу"
 
-        missing = [c for c in [date_col, credit_col, purpose_col] if c not in df.columns]
+        missing = []
+        if date_col is None:
+            missing.append("Дата/Дата операції")
+        if credit_col is None:
+            missing.append("Зараховано/Кредит")
+        if purpose_col not in df.columns:
+            missing.append("Призначення платежу")
+
         if missing:
             st.error(f"Missing required column(s): {', '.join(missing)}")
             st.write("Detected headers:", list(df.columns))
             st.stop()
 
-        # Keep rows where 'Зараховано' > 0
+        # Keep rows where credit > 0
         amt_num = parse_amount(df[credit_col])
         df_pos = df.loc[amt_num > 0].copy()
 
@@ -145,19 +172,18 @@ if uploaded:
         df_pos["ІПН"] = df_pos[purpose_col].map(extract_ipn)
         df_pos["CaseID"] = df_pos[purpose_col].map(extract_caseid)
         df_pos["ПІБ"] = df_pos[purpose_col].map(extract_name)
-        
-    
 
-        result_cols = ["Дата", "ВД", "ВП", "ІПН","CaseID", "ПІБ", purpose_col, credit_col]
+        # Build result
+        result_cols = ["Дата", "ВД", "ВП", "ІПН", "CaseID", "ПІБ", purpose_col, credit_col]
         result = df_pos[result_cols].copy()
 
         if result.empty:
-            st.warning("No rows where 'Зараховано' > 0.")
+            st.warning("No rows where the credit amount is greater than 0.")
         else:
-            st.success(f"Showing {len(result)} row(s) where 'Зараховано' > 0.")
+            st.success(f"Showing {len(result)} row(s) with credit > 0.")
             st.dataframe(result.head(1000), use_container_width=True)
 
-            # Download buttons
+            # Downloads
             csv_bytes = result.to_csv(index=False).encode("utf-8-sig")
             st.download_button("⬇️ Download CSV", data=csv_bytes,
                                file_name="parsed_statement.csv", mime="text/csv")
