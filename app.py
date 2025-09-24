@@ -124,8 +124,8 @@ if uploaded:
         df = df.rename(columns=_clean_header)
 
         # Required columns (exact names after normalization)
-        date_col = "Дата"
-        credit_col = "Зараховано"
+        date_col = "Дата", "Дата операції"
+        credit_col = "Зараховано", "Кредит"
         purpose_col = "Призначення платежу"
 
         missing = [c for c in [date_col, credit_col, purpose_col] if c not in df.columns]
