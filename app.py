@@ -7,7 +7,7 @@ from io import BytesIO
 st.set_page_config(page_title="Bank Statement Convertor", layout="centered")
 
 # ===== Simple authentication =====
-CREDENTIALS = {"User": "1"}
+CREDENTIALS = {"CitiUser1": "Citi43@!"}
 
 def login():
     st.title("🔐 Sign in")
